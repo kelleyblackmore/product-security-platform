@@ -1,0 +1,11 @@
+[project]
+name = "psp-service"
+version = "0.1.0"
+dependencies = [
+  "fastapi==0.115.0",
+  "uvicorn==0.30.6",
+  "pyjwt==2.9.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

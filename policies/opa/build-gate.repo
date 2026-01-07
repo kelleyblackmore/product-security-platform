@@ -1,0 +1,36 @@
+package psp
+
+default allow := false
+
+# Input contract (example):
+# {
+#   "sbom_present": true,
+#   "vulns": { "critical": 0, "high": 3 },
+#   "iac": { "failed": 0 },
+#   "sast": { "alerts": 0 },
+#   "signed": true
+# }
+
+deny[msg] {
+  not input.sbom_present
+  msg := "SBOM missing"
+}
+
+deny[msg] {
+  input.vulns.critical > 0
+  msg := sprintf("Critical vulnerabilities found: %d", [input.vulns.critical])
+}
+
+deny[msg] {
+  input.iac.failed > 0
+  msg := sprintf("IaC checks failing: %d", [input.iac.failed])
+}
+
+deny[msg] {
+  not input.signed
+  msg := "Image must be signed"
+}
+
+allow {
+  count(deny) == 0
+}

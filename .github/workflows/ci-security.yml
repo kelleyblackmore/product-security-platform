@@ -1,0 +1,126 @@
+name: CI Security
+
+on:
+  pull_request:
+  push:
+    branches: ["main"]
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+jobs:
+  build-and-scan:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install app deps (tests)
+        working-directory: app/service
+        run: |
+          python -m pip install -U pip
+          pip install .
+          pip install pytest
+
+      - name: Unit tests
+        working-directory: app/service
+        run: pytest -q
+
+      - name: Build container
+        run: docker build -t psp/service:ci app/service
+
+      # --- SBOM ---
+      - name: Install Syft
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+
+      - name: Generate SBOM (CycloneDX + SPDX)
+        run: |
+          mkdir -p artifacts
+          syft psp/service:ci -o cyclonedx-json > artifacts/sbom.cdx.json
+          syft psp/service:ci -o spdx-json > artifacts/sbom.spdx.json
+
+      # --- Container scan ---
+      - name: Install Trivy
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget
+          wget -qO- https://github.com/aquasecurity/trivy/releases/latest/download/trivy_0.57.1_Linux-64bit.tar.gz | sudo tar zx -C /usr/local/bin trivy
+
+      - name: Trivy scan (JSON)
+        run: trivy image --exit-code 0 --format json -o artifacts/trivy.json psp/service:ci
+
+      - name: Install Grype
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
+
+      - name: Grype scan (JSON)
+        run: grype psp/service:ci -o json > artifacts/grype.json
+
+      # --- IaC scan ---
+      - name: Install Checkov
+        run: pip install checkov
+
+      - name: Checkov (Terraform)
+        run: |
+          checkov -d infra/terraform --output json > artifacts/checkov.json || true
+
+      # --- Policy gate input summarize ---
+      - name: Create policy input
+        run: |
+          python - << 'PY'
+          import json, pathlib
+          p = pathlib.Path("artifacts")
+          # Minimal demo: you’ll likely parse trivy/grype properly
+          policy_input = {
+            "sbom_present": (p/"sbom.cdx.json").exists(),
+            "vulns": {"critical": 0, "high": 0},
+            "iac": {"failed": 0},
+            "sast": {"alerts": 0},
+            "signed": False
+          }
+          (p/"policy-input.json").write_text(json.dumps(policy_input))
+          PY
+
+      - name: Install OPA
+        run: |
+          curl -L -o opa https://openpolicyagent.org/downloads/latest/opa_linux_amd64_static
+          chmod +x opa
+          sudo mv opa /usr/local/bin/opa
+
+      - name: OPA gate (informational for PRs)
+        run: |
+          opa eval -I -d policies/opa/build-gate.rego -i artifacts/policy-input.json "data.psp.deny" | tee artifacts/opa-deny.json
+          opa eval -I -d policies/opa/build-gate.rego -i artifacts/policy-input.json "data.psp.allow" | tee artifacts/opa-allow.json
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-artifacts
+          path: artifacts/
+
+  codeql:
+    name: CodeQL (SAST)
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ["python"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+      - uses: github/codeql-action/analyze@v3
