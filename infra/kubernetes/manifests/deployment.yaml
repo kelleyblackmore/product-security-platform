@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: psp-service
+  namespace: psp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: psp-service
+  template:
+    metadata:
+      labels:
+        app: psp-service
+    spec:
+      serviceAccountName: psp-service
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: service
+          image: ghcr.io/OWNER/REPO/service:latest
+          ports:
+            - containerPort: 8080
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10

@@ -1,0 +1,23 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: psp-readonly
+  namespace: psp
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: psp-readonly-binding
+  namespace: psp
+subjects:
+  - kind: ServiceAccount
+    name: psp-service
+    namespace: psp
+roleRef:
+  kind: Role
+  name: psp-readonly
+  apiGroup: rbac.authorization.k8s.io

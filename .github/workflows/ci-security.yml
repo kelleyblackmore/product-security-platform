@@ -48,12 +48,10 @@ jobs:
           syft psp/service:ci -o cyclonedx-json > artifacts/sbom.cdx.json
           syft psp/service:ci -o spdx-json > artifacts/sbom.spdx.json
 
-      # --- Container scan ---
       - name: Install Trivy
         run: |
-          sudo apt-get update
-          sudo apt-get install -y wget
-          wget -qO- https://github.com/aquasecurity/trivy/releases/latest/download/trivy_0.57.1_Linux-64bit.tar.gz | sudo tar zx -C /usr/local/bin trivy
+          wget -qO- https://github.com/aquasecurity/trivy/releases/latest/download/trivy_0.57.1_Linux-64bit.tar.gz \
+            | sudo tar zx -C /usr/local/bin trivy
 
       - name: Trivy scan (JSON)
         run: trivy image --exit-code 0 --format json -o artifacts/trivy.json psp/service:ci
@@ -75,22 +73,39 @@ jobs:
 
       # --- Policy gate input summarize ---
       - name: Create policy input
+      # --- Start service for DAST ---
+      - name: Run service container
         run: |
-          python - << 'PY'
-          import json, pathlib
-          p = pathlib.Path("artifacts")
-          # Minimal demo: you’ll likely parse trivy/grype properly
-          policy_input = {
-            "sbom_present": (p/"sbom.cdx.json").exists(),
-            "vulns": {"critical": 0, "high": 0},
-            "iac": {"failed": 0},
-            "sast": {"alerts": 0},
-            "signed": False
-          }
-          (p/"policy-input.json").write_text(json.dumps(policy_input))
-          PY
+          docker run -d --name psp-svc -p 8080:8080 psp/service:ci
+          sleep 3
+          curl -fsS http://localhost:8080/healthz
 
-      - name: Install OPA
+      - name: OWASP ZAP Baseline (DAST)
+        run: |
+          mkdir -p artifacts
+          docker run --rm --network host \
+            -v "$(pwd)/artifacts:/zap/wrk:rw" \
+            ghcr.io/zaproxy/zaproxy:stable \
+            zap-baseline.py -t http://localhost:8080 -J zap.json -r zap.html || true
+          # Move the ZAP outputs to our artifacts folder names
+          if [ -f artifacts/zap.json ]; then
+            echo "ZAP JSON present"
+          fi
+
+      - name: Stop service container
+        if: always()
+        run: |on
+          docker rm -f psp-svc || true
+
+      # --- Policy input summarize ---
+      - name: Create policy input
+        run: |
+          python scripts/summarize_policy_input.py \
+            --trivy artifacts/trivy.json \
+            --grype artifacts/grype.json \
+            --checkov artifacts/checkov.json \
+            --sbom artifacts/sbom.cdx.json \
+            --out artifacts/policy-input.json: Install OPA
         run: |
           curl -L -o opa https://openpolicyagent.org/downloads/latest/opa_linux_amd64_static
           chmod +x opa

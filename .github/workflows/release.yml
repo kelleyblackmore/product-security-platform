@@ -24,6 +24,16 @@ jobs:
       - name: Push image
         run: docker push ghcr.io/${{ github.repository }}/service:${{ github.ref_name }}
 
+      - name: Install Syft
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+
+      - name: Generate SBOMs for release image
+        run: |
+          mkdir -p artifacts
+          syft ghcr.io/${{ github.repository }}/service:${{ github.ref_name }} -o cyclonedx-json > artifacts/sbom.cdx.json
+          syft ghcr.io/${{ github.repository }}/service:${{ github.ref_name }} -o spdx-json > artifacts/sbom.spdx.json
+
       - name: Install Cosign
         uses: sigstore/cosign-installer@v3
 
@@ -32,3 +42,17 @@ jobs:
           COSIGN_EXPERIMENTAL: "true"
         run: |
           cosign sign --yes ghcr.io/${{ github.repository }}/service:${{ github.ref_name }}
+
+      - name: Create policy input (enforce signed)
+        run: |
+          python scripts/summarize_policy_input.py \
+            --sbom artifacts/sbom.cdx.json \
+            --out artifacts/policy-input.json \
+            --signed \
+            --enforce-signed
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-security-artifacts
+          path: artifacts/
